@@ -1,0 +1,10 @@
+# Paths that laya-pii skips when it scans this repository.
+# One pattern per line: "dir/" is a folder anywhere, "*.csv" a file name, "a/b.txt" a path.
+
+# Synthetic personal data, on purpose: evaluation sets, examples and test fixtures.
+eval/data/
+examples/
+tests/
+
+# The scanner's own keyword and person-word lists ("diabetes", "patiënt", ...).
+src/laya_pii_scanner/scanner.py

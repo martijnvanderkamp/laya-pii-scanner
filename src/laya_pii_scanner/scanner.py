@@ -53,11 +53,22 @@ THRESHOLDS = {
 
 # ---------------------------------------------------------------- patterns
 
-EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+EMAIL = re.compile(r"(?<![\w.+-])[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[A-Za-z]{2,}(?![\w-])")  # not "repo.git@v0.1.0"
 ROLE_MAILBOX = re.compile(
     r"^(?:info|contact|support|help|helpdesk|hr|admin|administratie|sales|verkoop|office|kantoor|"
-    r"noreply|no-reply|service|klantenservice|facturen|factuur|finance|billing|team|hello|hallo|"
-    r"receptie|secretariaat|privacy|post|mail|webmaster|jobs|vacatures|pers|press)@", re.I)
+    r"noreply|no-reply|donotreply|do-not-reply|service|klantenservice|facturen|factuur|finance|billing|"
+    r"team|hello|hallo|receptie|secretariaat|privacy|dpo|legal|compliance|security|abuse|opensource|"
+    r"open-source|post|mail|webmaster|postmaster|jobs|careers|vacatures|recruitment|pers|press|"
+    r"marketing|newsletter|nieuwsbrief|notifications|dev|developers|engineering|ops|it)@", re.I)
+# "name@file.rb" in code is a method and a file, not an address.
+CODE_EXTENSIONS = {"py", "rb", "js", "ts", "go", "rs", "java", "kt", "cs", "cpp", "php", "sol", "sh",
+                   "md", "txt", "json", "yml", "yaml", "toml", "lock", "log", "html", "css", "c", "h"}
+
+
+def _is_email(addr: str) -> bool:
+    domain = addr.rsplit("@", 1)[1]
+    labels = domain.lower().split(".")
+    return not (len(labels) == 2 and labels[1] in CODE_EXTENSIONS)
 PHONE = re.compile(r"""(?<![\w+])(?:
       (?:\+|00)\d{1,3}[\s.-]?(?:\(0\)[\s.-]?)?\d{1,4}(?:[\s.-]?\d{2,4}){2,4}
     | 0\d{1,4}[\s.-]?\d{2,4}(?:[\s.-]?\d{2,4}){1,3}
@@ -101,6 +112,20 @@ PERSON_CUE = re.compile(
     r"father|wife|husband|hi|hoi|hallo|hello|hey|dear|beste|geachte)\.?[ \t]*\Z"
     r"|(?<!\w)(?:groet|groeten|regards|sincerely|cheers|vriendelijke groet|hartelijke groet),?[ \t]*\n\s*\Z",
     re.I)
+# Five or more keywords of one category in one sentence is a word list, not a statement.
+WORD_LIST_MIN = 5
+# Sensitive data is personal data only when it is about someone. A passage needs one of these
+# words (or a confirmed name) before any special category finding in it counts. Second person
+# and "we" are left out: documentation addresses its reader and speaks for an organisation.
+PERSON_REF = re.compile(
+    r"(?<!\w)(?:he|she|him|her|his|hers|himself|herself|they|them|their|i|me|my|mine|myself|"
+    r"hij|zij|ze|hem|haar|hun|hen|zijn|ik|mij|mijn|zich|patiënte?|patients?|cliënte?|clients?|"
+    r"klant|customer|collega|colleague|werknemer|medewerker|employee|sollicitant|applicant|"
+    r"kandidaat|candidate|verdachte|suspect|huurder|tenant|leerling|pupil|student|zoon|dochter|son|"
+    r"daughter|broer|zus|brother|sister|moeder|vader|mother|father|mum|mom|dad|man|vrouw|wife|"
+    r"husband|partner|echtgeno(?:ot|te)|buurman|buurvrouw|neighbou?r|schoonmoeder|schoonvader|oma|"
+    r"opa|grandmother|grandfather|kind|child|meneer|mevrouw|mr|mrs|ms|miss|mevr|dhr|mw|"
+    r"verzekerde|policyholder|claimant|caretaker|landlord|verhuurder)(?!\w)", re.I)
 INITIALS_NAME = re.compile(r"^(?:[A-Z]\.[ ]?)+(?:(?:van|de|der|den|te|ter|ten)[ ]+)*[A-Z][a-zà-öø-ÿ]")
 
 _MONTHS = (r"januari|februari|maart|april|mei|juni|juli|augustus|september|oktober|november|december|"
@@ -355,13 +380,17 @@ class PIIScanner:
     device: "cuda" or "cpu"; defaults to CUDA when available.
     router: an existing `laya.Router` to reuse (or any object with a compatible `predict_batch`).
     chunk_check: also flag sensitive categories that no keyword pointed at (the safety net).
+    rules_only: skip Laya entirely. Only patterns, checksums and context cues decide, so names
+        without a cue and all special category data go undetected, but no model is loaded.
 
     Creating a scanner loads Laya's English and multilingual checkpoints once (downloading them
     from Hugging Face on first use); reuse the instance for every text.
     """
 
-    def __init__(self, device: Optional[str] = None, router=None, chunk_check: bool = True):
-        if router is None:
+    def __init__(self, device: Optional[str] = None, router=None, chunk_check: bool = True,
+                 rules_only: bool = False):
+        self.rules_only = rules_only
+        if router is None and not rules_only:
             import torch
             from laya import Router
             with warnings.catch_warnings():
@@ -372,7 +401,7 @@ class PIIScanner:
         self.chunk_check = chunk_check
 
     # -- step 1: patterns, and the candidates that need Laya ------------------------------
-    def _patterns(self, chunk: str) -> Tuple[List[Finding], List[dict]]:
+    def _patterns(self, chunk: str, common_words: frozenset = frozenset()) -> Tuple[List[Finding], List[dict], dict]:
         found: List[Finding] = []
         todo: List[dict] = []
         taken: List[Tuple[int, int]] = []
@@ -396,13 +425,14 @@ class PIIScanner:
         for m in EMAIL.finditer(chunk):
             if free(*m.span()):
                 taken.append(m.span())
-                if not ROLE_MAILBOX.match(m.group()):
+                if not ROLE_MAILBOX.match(m.group()) and _is_email(m.group()):
                     add("contact", *m.span())
         for m in CARD.finditer(chunk):
             if free(*m.span()) and luhn_valid(m.group()):
                 add("card", *m.span())
         for m in IP.finditer(chunk):
-            if free(*m.span()) and not cue(VERSION_CUE, m.start(), 20):
+            technical = m.group().startswith(("0.", "127.", "255."))  # any-address, loopback, netmask
+            if free(*m.span()) and not technical and not cue(VERSION_CUE, m.start(), 20):
                 add("online_id", *m.span())
         for m in DATE.finditer(chunk):
             if free(*m.span()):
@@ -441,10 +471,14 @@ class PIIScanner:
                 words = words[1:]
             if chunk[a:b].endswith(("'s", "’s")):  # "Tom's" -> "Tom"
                 b -= 2
-            if not words or not free(a, b):
+            while b > a and chunk[b - 1] in "'’":  # 'Rachel' in quotes -> Rachel
+                b -= 1
+            if not words or not free(a, b) or len(words) > 5:  # long runs are Title Case headings
                 continue
             cand = chunk[a:b]
             if cand.lower() in STOP or cand in seen:
+                continue
+            if len(words) == 1 and cand.lower() in common_words:  # "Install" next to "install"
                 continue
             seen.add(cand)
             if INITIALS_NAME.match(cand) or cue(PERSON_CUE, a, 20):  # "T.J. Hoekstra", "mevr. Bakker"
@@ -452,7 +486,10 @@ class PIIScanner:
             else:
                 todo.append({"kind": "name", "span": (a, b), "questions": WORD_Q})
 
-        keywords = {cat: [m.span() for m in rx.finditer(chunk) if free(*m.span())]
+        # ALL-CAPS words of five or more letters are constants and log levels ("PANIC"), not
+        # statements; short acronyms such as HIV and ADHD still count
+        keywords = {cat: [m.span() for m in rx.finditer(chunk)
+                          if free(*m.span()) and not (m.group().isupper() and len(m.group()) >= 5)]
                     for cat, rx in LEXICON_RE.items()}
         return found, todo, keywords
 
@@ -466,29 +503,60 @@ class PIIScanner:
             return answers["what"]["probabilities"]["citizen_id"], THRESHOLDS["id_number"]
         return answers["dob"]["noul"], THRESHOLDS["dob"]
 
-    def scan(self, text: str) -> List[ChunkResult]:
-        """Split `text` into passages of up to ~500 characters and return one result per passage."""
-        chunks =[ChunkResult(a, b, text[a:b]) for a, b in chunk_spans(text)]
-        requests, meta, keywords = [], [], []
+    def scan(self, text: str, chunk_check: Optional[bool] = None) -> List[ChunkResult]:
+        """Split `text` into passages of up to ~500 characters and return one result per passage.
+
+        chunk_check overrides the scanner's safety-net setting for this text (scan_file turns it
+        off for source code, where comments and strings are fragments).
+        """
+        use_safety_net = self.chunk_check if chunk_check is None else chunk_check
+        chunks = [ChunkResult(a, b, text[a:b]) for a, b in chunk_spans(text)]
+        # words that also occur in lower case are ordinary words, not names ("Install", "Email")
+        common_words = frozenset(re.findall(r"(?<![\w'’-])[a-zà-öø-ÿ][\w'’-]*", text))
+        requests: List[dict] = []
+        meta: List[Tuple[int, dict, int]] = []          # (chunk index, task, request index)
+        keywords, person_ref = [], []
+        word_lists: set = set()                         # (chunk index, sentence start)
+        asked: Dict[Tuple[str, str], int] = {}          # a repeated name is asked once per text
         for ci, ch in enumerate(chunks):
-            found, todo, kw = self._patterns(ch.text)
+            found, todo, kw = self._patterns(ch.text, common_words)
             ch.findings.extend(found)
             keywords.append(kw)
+            person_ref.append(bool(PERSON_REF.search(ch.text)))
+            if self.rules_only:
+                continue
             for t in todo:
                 a, b = t["span"]
-                requests.append({"state": {"text": ch.text, "candidate": ch.text[a:b]}, "questions": t["questions"]})
-                meta.append((ci, t))
+                key = (t["kind"], ch.text[a:b])
+                if key not in asked:
+                    asked[key] = len(requests)
+                    requests.append({"state": {"text": ch.text, "candidate": ch.text[a:b]},
+                                     "questions": t["questions"]})
+                meta.append((ci, t, asked[key]))
             # Sensitive categories are asked per sentence, with the previous sentence as context so
             # "Hij" still points at someone: on whole 500-character chunks the signal washed out.
+            # Asked: sentences with a keyword in a passage that may be about someone, and (for the
+            # safety net) any sentence in a passage with a clear person reference.
+            could_be_personal = person_ref[ci] or any(f.category == "name" for f in found) or \
+                any(t["kind"] == "name" for t in todo)
             sents = sentence_spans(ch.text)
+            for a, b in sents:  # many keywords of one category in a sentence make a word list
+                for cat, spans in kw.items():
+                    if sum(a <= s < b for s, _ in spans) >= WORD_LIST_MIN:
+                        kw[cat] = [(s, e) for s, e in spans if not a <= s < b]
+                        word_lists.add((ci, a))  # no safety net for this sentence either
             for si, (a, b) in enumerate(sents):
+                has_keyword = any(a <= s < b for spans in kw.values() for s, _ in spans)
+                if not ((has_keyword and could_be_personal) or (use_safety_net and person_ref[ci])):
+                    continue
                 ctx = sents[si - 1][0] if si else a
+                meta.append((ci, {"kind": "sentence", "span": (a, b)}, len(requests)))
                 requests.append({"state": {"text": ch.text[ctx:b]}, "questions": CHUNK_Q})
-                meta.append((ci, {"kind": "sentence", "span": (a, b)}))
         results = self.router.predict_batch(requests, batch_size=32, sort_by_length=True) if requests else []
         safety: Dict[Tuple[int, str], float] = {}
-        for (ci, t), res in zip(meta, results):
-            ch = chunks[ci]
+        special: List[Tuple[int, Finding]] = []
+        for ci, t, ri in meta:
+            ch, res = chunks[ci], results[ri]
             if t["kind"] == "sentence":
                 sa, sb = t["span"]
                 for cat in SPECIAL:
@@ -497,8 +565,8 @@ class PIIScanner:
                     if spans:  # a keyword marks where; Laya decides whether it is about someone
                         for a, b in spans:
                             if _kept(p, THRESHOLDS["special"]):
-                                ch.findings.append(Finding(cat, ch.text[a:b], a, b, "laya", p, THRESHOLDS["special"]))
-                    elif self.chunk_check:
+                                special.append((ci, Finding(cat, ch.text[a:b], a, b, "laya", p, THRESHOLDS["special"])))
+                    elif use_safety_net and (ci, sa) not in word_lists:
                         safety[(ci, cat)] = max(p, safety.get((ci, cat), 0.0))
                 continue
             conf, thr = self._score(t["kind"], res["answers"])
@@ -506,9 +574,12 @@ class PIIScanner:
                 a, b = t["span"]
                 ch.findings.append(Finding(t["kind"], ch.text[a:b], a, b, "laya", conf, thr))
         for (ci, cat), p in safety.items():  # no keyword anywhere in that sentence: the safety net
+            if _kept(p, THRESHOLDS["chunk_special"]) and not any(c == ci and f.category == cat for c, f in special):
+                special.append((ci, Finding(cat, "(whole passage)", None, None, "laya", p, THRESHOLDS["chunk_special"])))
+        for ci, f in special:  # sensitive data counts only in a passage that is about someone
             ch = chunks[ci]
-            if _kept(p, THRESHOLDS["chunk_special"]) and not any(f.category == cat for f in ch.findings):
-                ch.findings.append(Finding(cat, "(whole passage)", None, None, "laya", p, THRESHOLDS["chunk_special"]))
+            if person_ref[ci] or any(x.category == "name" and x.confirmed for x in ch.findings):
+                ch.findings.append(f)
         for ch in chunks:  # chunk-relative -> absolute offsets
             for f in ch.findings:
                 if f.start is not None:

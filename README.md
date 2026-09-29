@@ -2,9 +2,10 @@
 
 [![tests](https://github.com/martijnvanderkamp/laya-pii-scanner/actions/workflows/tests.yml/badge.svg)](https://github.com/martijnvanderkamp/laya-pii-scanner/actions/workflows/tests.yml)
 
-Find personal data in Dutch and English text, on your own machine. Paste a piece of text
-and get a verdict per passage (clean, personal data, special category data, or review), the
-findings with a confidence score, and optionally a redacted copy.
+Find personal data in Dutch and English text, files, folders and git repositories, on your
+own machine. Paste a piece of text or point it at a repository, and get a verdict per passage
+or file (clean, personal data, special category data, or review), each finding with its line,
+column and confidence, and optionally a redacted copy.
 
 It combines checksummed patterns (IBAN, BSN, payment cards) and context rules with
 [Laya](https://github.com/NandhaKishorM/laya), an open-weights decision model that answers
@@ -17,7 +18,7 @@ model download.
 > [Accuracy](#accuracy).
 
 ```text
-$ laya-pii --file examples/email_en.txt --redact
+$ laya-pii examples/email_en.txt --redact
 
 ── Passage 1/2 · SPECIAL CATEGORY DATA (address, bank account, date of birth, email or phone, health, name)
    Subject: Onboarding - new starter in the Leeds office  Hi Rachel,  Our new analyst, Tom Ashworth (date of birt…
@@ -79,6 +80,8 @@ Hugging Face into your local cache. After that, add `--offline` to run without a
 
 ## Use
 
+### Text and single files
+
 Paste text, finish with an empty line, then paste the next piece. Ctrl+C quits.
 
 ```bash
@@ -88,17 +91,128 @@ laya-pii
 Scan a file, and print a redacted copy:
 
 ```bash
-laya-pii --file letter.txt --redact
+laya-pii letter.txt --redact
 ```
 
 Machine-readable output for other tools:
 
 ```bash
-laya-pii --file letter.txt --json
+laya-pii letter.txt --json
 ```
 
 Other options: `--device cpu` or `--device cuda`, and `--offline` once the model is cached.
 `python -m laya_pii_scanner` works the same as `laya-pii`.
+
+### Folders and git repositories
+
+```bash
+laya-pii path/to/repo
+```
+
+```text
+$ laya-pii ~/src/acme-crm
+
+/home/you/src/acme-crm · git repository, tracked files · 5 files scanned · skipped 2: 1 binary or media file, 1 lock file
+
+docs/intake-notes.md  PERSONAL DATA
+     1:24     Name                      'Sandra Mulder'                              0.95  rule
+
+src/seed.py  PERSONAL DATA
+     2:20     Bank account              'NL91ABNA0417164300'                         1.00  rule
+     6:27     Name                      'Pieter de Wit'                              0.95  laya
+     6:50     Email or phone            'pieter.dewit@example.com'                   1.00  rule
+     6:84     Email or phone            '06-12345678'                                1.00  rule
+     7:27     Name                      'Test User'                                  0.92  laya
+     7:46     Email or phone            'test@example.com'                           1.00  rule
+   + 1 below the threshold (--show-review lists them)
+
+5 files in 0.5 s: 0 special category data · 2 personal data · 0 review · 3 clean
+```
+
+In this example, `.venv/` and `node_modules/` are in `.gitignore`, so they are never read.
+The tracked logo and lock file are skipped. In `src/seed.py` the IBAN inside a string is
+found, but `class CustomerService` in `src/app.ts` is not taken for a name.
+
+The output also shows two known weaknesses. "Test User" is a placeholder that is flagged as
+a name. The note "Ze zit sinds maandag thuis met een burn-out" is missed as health data; see
+[Accuracy](#accuracy).
+
+**What is read.** In a git repository, only the files git tracks. Everything in `.gitignore`
+is left alone, such as virtual environments, build output and local data.
+`--include-untracked` also reads new files that are not ignored. In any other folder, all
+files are read, recursively.
+
+**What is always skipped**, even when tracked:
+
+- virtual environments: `.venv`, `venv`, and any folder with a `pyvenv.cfg`
+- dependency, cache and build folders: `node_modules`, `vendor`, `site-packages`,
+  `__pycache__`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `dist`, `build`,
+  `target`, `*.egg-info`, `.idea`, `.vscode`
+- binary and media files, office documents and PDFs
+- lock files, minified bundles and source maps
+- files over 1 MB (change the limit with `--max-size`)
+
+**How each file is read.**
+
+- **Source code** (Python, JavaScript and TypeScript, Java, C#, Go, Rust, C and C++, PHP,
+  Ruby, shell, SQL and more): only string literals, comments and numbers of six or more
+  digits. Identifiers such as `CustomerService` are never read as names, and line and column
+  numbers still point at the original file.
+- **HTML**: the visible text only.
+- **Everything else** (Markdown, text, CSV, JSON, YAML, notebooks, e-mails, config files):
+  the whole file.
+
+**Skip more** with `--exclude` (repeatable):
+
+```bash
+laya-pii . --exclude "tests/fixtures/" --exclude "*.csv"
+```
+
+Or commit a `.laya-pii-ignore` file to the scanned folder, with one pattern per line:
+
+```text
+# synthetic test data
+tests/fixtures/
+*.sample.json
+docs/examples/customers.md
+```
+
+The patterns match like this:
+
+- A pattern ending in `/` matches a folder anywhere, or a path from the scanned folder when it
+  contains another `/`.
+- `*.csv` matches file names.
+- Any other pattern matches a path from the scanned folder.
+
+`--show-skipped` lists every skipped path with the reason.
+
+| Option | Effect |
+|---|---|
+| `--fail-on special\|personal\|review\|never` | The lowest verdict that makes the exit code 1. Default `personal`. |
+| `--fast` | Rules only, no model: formats, checksums and cued names. Much faster and needs no GPU or PyTorch, but misses other names and all special category data. |
+| `--json` | A summary, and for every file with findings each finding's category, text, line, column, confidence and source. |
+| `--threshold NAME=VALUE` | Override a threshold, for example `name=0.9` to report fewer uncertain names. Repeatable. |
+| `--show-review` | Also list findings below the threshold. They are always counted per file, and always included in `--json`. |
+| `--include-untracked` | Git: also scan new files that `.gitignore` allows. |
+| `--exclude PATTERN` | Skip matching paths. Repeatable. |
+| `--max-size KB` | Skip larger files. Default 1000. |
+| `--show-skipped` | List every skipped path and why. |
+
+Exit codes: 0 when nothing reaches the `--fail-on` level, 1 when something does, and 2 for
+a usage error.
+
+**In CI.** The `--fast` mode needs no model, so a pipeline can install the scanner without
+its dependencies and fail the build on personal data:
+
+```yaml
+- run: pip install --no-deps git+https://github.com/martijnvanderkamp/laya-pii-scanner.git
+- run: laya-pii . --fast
+```
+
+Add `@<tag>` to the URL to pin a release.
+
+For the full model in CI, install normally and cache `~/.cache/huggingface`. Without a GPU,
+expect minutes rather than seconds.
 
 ### From Python
 
@@ -115,6 +229,20 @@ for chunk in chunks:
             print(f.category, f.text, f.start, f.end, round(f.confidence, 2), f.source)
 
 print(redact(text, chunks))       # confirmed findings replaced by [NAME], [IBAN], ...
+```
+
+For a folder or repository:
+
+```python
+from pathlib import Path
+from laya_pii_scanner import PIIScanner, scan_tree
+
+report = scan_tree(PIIScanner(), Path("path/to/repo"), excludes=["tests/fixtures/"])
+for file in report.files:
+    for f in file.findings:
+        if f.confirmed:
+            print(file.path, f.line, f.column, f.category, f.text)
+print(report.counts(), report.skipped)
 ```
 
 ### Reading the output
@@ -139,22 +267,33 @@ cue decided; `laya` means the model did.
 
 For special category data, keyword lists only mark *where* something might be ("diabetes",
 "moskee", "arrested"). Laya then decides per sentence whether it is about one specific person
-("she has diabetes") or a general statement ("diabetes affects one in ten adults"). All
-thresholds live in `THRESHOLDS` at the top of
+("she has diabetes") or a general statement ("diabetes affects one in ten adults").
+
+Three rules keep technical text quiet:
+
+- **A person must be in the passage.** Sensitive data only counts in a passage that refers
+  to a person: a pronoun, a role such as "patiënt" or "collega", or a confirmed name.
+- **Word lists are not statements.** Five or more keywords of one category in a sentence
+  form a word list.
+- **Ordinary words are not names.** A capitalised word that also appears in lower case in
+  the same file ("Install", "Email") is not a name candidate.
+
+All thresholds live in `THRESHOLDS` at the top of
 [`src/laya_pii_scanner/scanner.py`](src/laya_pii_scanner/scanner.py).
 
 ## Accuracy
 
 Measured with `laya` 0.3.21 on an RTX 4070 Laptop GPU. The final test set was written by a
-separate agent that never saw the code; the rule fixes in this release came after its first
-run and moved the scores by at most 0.01.
+separate agent that never saw the code. It was first used for v0.1.0; the v0.2.0 changes
+target noise in repositories and were checked against it afterwards. Recall stayed the same
+and precision went up.
 
 | | Development set (90 texts) | Final test set (60 texts, independent) |
 |---|---|---|
 | Text contains personal data? Recall | 0.96 | **0.95** |
-| Text contains personal data? Precision | 0.85 | **0.76** |
-| All categories, micro F1 | 0.91 | **0.76** |
-| Verdict clean / personal / special correct | 0.86 | **0.62** |
+| Text contains personal data? Precision | 0.93 | **0.82** |
+| All categories, micro F1 | 0.93 | **0.78** |
+| Verdict clean / personal / special correct | 0.91 | **0.68** |
 
 Recall per category on the final test set:
 
@@ -174,8 +313,27 @@ Known limitations:
 - Dutch and English only. Other languages are routed to Laya's multilingual checkpoint but
   were not evaluated.
 
-Speed: about 40-80 ms for a short text and 0.3-0.8 s for an email of a few paragraphs on
-the GPU above; on CPU about 0.7 s and 10 s respectively.
+Limits when scanning repositories:
+
+- **Only the current files are read, not the git history.** Data that was committed and
+  later deleted is still in the history. To scan an older state, check it out, for example
+  with `git worktree add`.
+- **PDFs, office documents and images are skipped**, not read.
+- **Code is split into strings and comments with patterns, not a parser.** Unusual string
+  syntax, such as heredocs or raw strings with custom delimiters, can be missed.
+- **Intentional names are reported too.** Author names in `LICENSE`, package metadata or
+  `CODEOWNERS` are personal data as well. Exclude those files when the names are there on
+  purpose.
+- **Technical documentation produces the most false names.** Product, tool and role names
+  such as "Claude", "Admin" or "Echidna" are sometimes taken for people. `--threshold
+  name=0.9` trades some recall for far fewer of these.
+
+Speed on the GPU above:
+
+- about 40-80 ms for a short text, and 0.3-0.8 s for an email of a few paragraphs; on CPU
+  about 0.7 s and 10 s
+- a 365-file repository of mostly Markdown, JSON and Python: about 8 minutes with the model,
+  3.4 s with `--fast`
 
 ## Evaluate and tune
 

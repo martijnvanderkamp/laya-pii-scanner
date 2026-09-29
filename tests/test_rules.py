@@ -1,33 +1,13 @@
 """Rule-level tests. They use a stand-in for Laya, so they need no model, GPU or network."""
 import pytest
+from fakes import FakeRouter
 
 from laya_pii_scanner import PIIScanner, redact
 from laya_pii_scanner.scanner import chunk_spans, elfproef, iban_valid, luhn_valid, sentence_spans
 
 
-class FakeRouter:
-    """Answers every Laya question with the same low (or chosen) probability."""
-
-    def __init__(self, noul=0.0):
-        self.noul = noul
-
-    def predict_batch(self, requests, batch_size=None, sort_by_length=False):
-        results = []
-        for req in requests:
-            answers = {}
-            for qid, q in req["questions"].items():
-                if q["type"] == "choice":
-                    labels = list(q["criteria"])
-                    answers[qid] = {"choice": labels[-1],
-                                    "probabilities": {k: float(k == labels[-1]) for k in labels}}
-                else:
-                    answers[qid] = {"noul": self.noul}
-            results.append({"answers": answers})
-        return results
-
-
-def categories(text, noul=0.0):
-    chunks = PIIScanner(router=FakeRouter(noul)).scan(text)
+def categories(text, noul=0.0, safety_net=True):
+    chunks = PIIScanner(router=FakeRouter(noul), chunk_check=safety_net).scan(text)
     return {f.category for ch in chunks for f in ch.findings if f.confirmed}
 
 
@@ -143,3 +123,55 @@ def test_chunks_respect_max_chars():
 def test_sentence_spans():
     chunk = "Eerste zin. Tweede zin!\nDerde regel"
     assert [chunk[a:b] for a, b in sentence_spans(chunk)] == ["Eerste zin.", "Tweede zin!", "Derde regel"]
+
+
+# ---------------------------------------------------------------- noise control
+
+def test_email_needs_a_real_top_level_domain():
+    assert "contact" not in categories("pip install git+https://github.com/x/laya-pii-scanner.git@v0.1.0")
+
+
+def test_capitalised_word_that_also_appears_lowercase_is_not_a_name():
+    chunks = PIIScanner(router=FakeRouter(person=1.0)).scan("Email\n\nSend an email to the team. Priya will reply.")
+    names = {f.text for ch in chunks for f in ch.findings if f.category == "name" and f.confirmed}
+    assert "Priya" in names and "Email" not in names  # the fake model calls every candidate a person
+
+
+def test_sensitive_data_needs_a_person_in_the_passage():
+    assert "health" not in categories("Diabetes affects one in ten adults worldwide.", noul=0.9)
+    assert "health" in categories("She has had diabetes since 2019.", noul=0.9)
+
+
+def test_repeated_name_is_asked_once():
+    router = FakeRouter()
+    PIIScanner(router=router).scan("Laya is fast.\n\nLaya is small.\n\nLaya runs locally.")
+    assert router.requests == 1
+
+
+def test_word_lists_are_not_statements_about_someone():
+    word_list = "She keeps a list: diabetes, asthma, cancer, depression, migraine and epilepsy."
+    assert "health" not in categories(word_list, noul=0.9)
+    assert "health" in categories("She has asthma and diabetes.", noul=0.9)
+
+
+def test_technical_ip_addresses_are_not_personal():
+    assert "online_id" not in categories("The server binds 0.0.0.0 and 127.0.0.1 with netmask 255.255.255.0.")
+    assert "online_id" in categories("Login from 198.51.100.23 was blocked.")
+
+
+def test_quoted_name_has_no_trailing_quote():
+    chunks = PIIScanner(router=FakeRouter(person=1.0)).scan("customer = 'Rachel' and owner = 'Tom O'Brien'")
+    names = {f.text for ch in chunks for f in ch.findings if f.category == "name" and f.confirmed}
+    assert "Rachel" in names and not any(n.endswith("'") for n in names)
+
+
+def test_code_references_and_organisation_mailboxes_are_not_personal_email():
+    assert "contact" not in categories("See vulnerable_function@test.rb and compare@utils.py.")
+    assert "contact" not in categories("Report issues to security@example.com or opensource@example.org.")
+    assert "contact" in categories("Mail jan.jansen@example.com for details.")
+
+
+def test_all_caps_constants_are_not_keywords():
+    # safety net off: only the keyword route is tested
+    assert "health" not in categories("He hit a PANIC in the kernel log.", noul=0.9, safety_net=False)
+    assert "health" in categories("He was diagnosed with ADHD last year.", noul=0.9, safety_net=False)
