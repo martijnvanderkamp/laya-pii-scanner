@@ -1,0 +1,40 @@
+{"id": "u01", "lang": "nl", "text": "Beste meneer De Vries, uw afspraak bij de huisarts is verzet naar dinsdag 14 oktober.", "expected": ["name", "health"]}
+{"id": "u02", "lang": "nl", "text": "Het kwartaalrapport laat een omzetstijging van 12% zien in de regio Utrecht.", "expected": []}
+{"id": "u03", "lang": "nl", "text": "Mijn BSN is 123456782 en mijn IBAN is NL91ABNA0417164300.", "expected": ["id_number", "bank"]}
+{"id": "u04", "lang": "nl", "text": "Jan Jansen (geboren 3 maart 1985) woont op de Kerkstraat 12, 3511 AB Utrecht.", "expected": ["name", "dob", "address"]}
+{"id": "u05", "lang": "nl", "text": "Patiënt heeft diabetes type 2 en gebruikt dagelijks metformine.", "expected": ["health"]}
+{"id": "u06", "lang": "nl", "text": "Bestelnummer 111222333 is vandaag verzonden via PostNL.", "expected": []}
+{"id": "u07", "lang": "nl", "text": "Philips heeft vandaag nieuwe kwartaalcijfers gepubliceerd.", "expected": []}
+{"id": "u08", "lang": "en", "text": "Please send the contract to Sarah Thompson at sarah.thompson@gmail.com.", "expected": ["name", "contact"]}
+{"id": "u09", "lang": "en", "text": "The meeting is scheduled for Monday in room 4B.", "expected": []}
+{"id": "u10", "lang": "en", "text": "He was arrested in 2019 for fraud and is an active member of the Socialist Party.", "expected": ["criminal", "politics"]}
+{"id": "u11", "lang": "en", "text": "Our API returns a 500 error when the payload exceeds 2 MB.", "expected": []}
+{"id": "u12", "lang": "nl", "text": "Mark is homoseksueel en katholiek opgevoed, vertelde hij zijn collega's.", "expected": ["name", "sexuality", "religion"]}
+{"id": "u13", "lang": "nl", "text": "Bel me gerust op 06-12345678 na vijf uur.", "expected": ["contact"]}
+{"id": "u14", "lang": "nl", "text": "Zij is moslima en van Marokkaanse afkomst.", "expected": ["religion", "ethnicity"]}
+{"id": "u15", "lang": "nl", "text": "De partijvergadering van de VVD is volgende week in Den Haag.", "expected": []}
+{"id": "u16", "lang": "nl", "text": "Hij zit al twee jaar in de gevangenis wegens diefstal.", "expected": ["criminal"]}
+{"id": "u17", "lang": "en", "text": "She has been on antidepressants since her burnout last year.", "expected": ["health"]}
+{"id": "u18", "lang": "nl", "text": "De kerk aan het plein wordt volgend jaar gerestaureerd.", "expected": []}
+{"id": "u19", "lang": "nl", "text": "Gisteren sprak ik met Fatima el Amrani over haar ontslag.", "expected": ["name"]}
+{"id": "u20", "lang": "nl", "text": "Volgens Jansen & Partners Advocaten is het contract rond.", "expected": []}
+{"id": "u21", "lang": "nl", "text": "Groeten,\nPieter", "expected": ["name"]}
+{"id": "u22", "lang": "en", "text": "Login attempts from 192.168.10.45 were blocked by the firewall.", "expected": ["online_id"]}
+{"id": "u23", "lang": "en", "text": "Card number 4111 1111 1111 1111, expiry 12/27.", "expected": ["card"]}
+{"id": "u24", "lang": "nl", "text": "Factuur 2024-00817 moet binnen 30 dagen betaald worden.", "expected": []}
+{"id": "u25", "lang": "en", "text": "Dear Mr. Okafor, your application for the position has been received.", "expected": ["name"]}
+{"id": "u26", "lang": "nl", "text": "Het ziekteverzuim op de afdeling is dit kwartaal gedaald naar 4%.", "expected": []}
+{"id": "u27", "lang": "en", "text": "Diabetes affects about one in eleven adults worldwide.", "expected": []}
+{"id": "u28", "lang": "nl", "text": "Mevrouw Bakker is sinds maandag ziekgemeld met rugklachten.", "expected": ["name", "health"]}
+{"id": "u29", "lang": "nl", "text": "Stuur de facturen naar administratie@bedrijf.nl.", "expected": []}
+{"id": "u30", "lang": "en", "text": "Tom has been a member of the Teamsters union for ten years.", "expected": ["name", "union"]}
+{"id": "u31", "lang": "nl", "text": "Onze nieuwe collega Priya Sharma begint op 1 november.", "expected": ["name"]}
+{"id": "u32", "lang": "nl", "text": "Het distributiecentrum zit op Industrieweg 40 in Tilburg.", "expected": []}
+{"id": "u33", "lang": "en", "text": "John Smith, born 14/02/1979, lives at 22 Baker Street, London.", "expected": ["name", "dob", "address"]}
+{"id": "u34", "lang": "nl", "text": "Mijn zoon heeft ADHD en krijgt daarom extra begeleiding op school.", "expected": ["health"]}
+{"id": "u35", "lang": "en", "text": "The Senate voted 52 to 48 on the bill yesterday.", "expected": []}
+{"id": "u36", "lang": "nl", "text": "Ingrid (42) uit Zwolle is veroordeeld tot een taakstraf.", "expected": ["name", "criminal"]}
+{"id": "u37", "lang": "en", "text": "Reach me at +44 20 7946 0958 or anna.k@outlook.com if anything changes.", "expected": ["contact"]}
+{"id": "u38", "lang": "nl", "text": "Zijn IBAN is NL20INGB0001234567, graag voor vrijdag overmaken.", "expected": ["bank"]}
+{"id": "u39", "lang": "en", "text": "Muslims around the world celebrate Eid al-Fitr at the end of Ramadan.", "expected": []}
+{"id": "u40", "lang": "nl", "text": "Sanne is lid van GroenLinks en stemt al jaren links.", "expected": ["name", "politics"]}

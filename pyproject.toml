@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laya-pii-scanner"
+version = "0.1.0"
+description = "Local PII scanner for Dutch and English text: checksummed patterns plus the Laya decision model."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Martijn van der Kamp" }]
+requires-python = ">=3.10"
+dependencies = ["laya>=0.3.21,<0.4"]
+keywords = ["pii", "gdpr", "avg", "privacy", "redaction", "anonymisation", "laya", "nlp", "dutch"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Natural Language :: Dutch",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Topic :: Text Processing :: Linguistic",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+laya-pii = "laya_pii_scanner.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/martijnvanderkamp/laya-pii-scanner"
+Issues = "https://github.com/martijnvanderkamp/laya-pii-scanner/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
