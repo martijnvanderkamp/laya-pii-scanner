@@ -45,28 +45,52 @@ his personal email is [CONTACT]. He lives at [ADDRESS].
 ## Requirements
 
 - Python 3.10 or newer
-- About 2 GB of disk for the models, plus PyTorch (~0.3 GB for CPU, ~3 GB for CUDA)
+- About 2 GB of disk for the models, plus PyTorch: a few hundred MB for the CPU build, about
+  3 GB for the CUDA build
 - Optional: an NVIDIA GPU with ~5 GB of free memory. It also runs on CPU, about 10× slower.
 
 ## Install
+
+Create a virtual environment:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate            # Windows: .venv\Scripts\activate
 ```
 
-**With an NVIDIA GPU**, install a CUDA build of PyTorch first. Pick the command for your
-system on [pytorch.org](https://pytorch.org/get-started/locally/); for CUDA 12.8 it is:
+Then install PyTorch the way that fits your machine. The PyTorch you install first decides
+how much is downloaded; the scanner then reuses it.
+
+| Your machine | Install first | Download |
+|---|---|---|
+| Linux without an NVIDIA GPU: servers, CI runners, laptops | the CPU build (below) | a few hundred MB |
+| Linux with an NVIDIA GPU | nothing: PyPI's Linux PyTorch is the CUDA build | about 3 GB |
+| Windows or macOS, CPU | nothing: PyPI's PyTorch is the CPU build there | a few hundred MB |
+| Windows with an NVIDIA GPU | a CUDA build from [pytorch.org](https://pytorch.org/get-started/locally/), for example `pip install torch --index-url https://download.pytorch.org/whl/cu128` | about 3 GB |
+| Only `--fast` (rules, no model) | nothing, and install the scanner with `--no-deps` | under 1 MB |
+
+**On Linux, skipping this step does not give you a CPU install.** A plain `pip install`
+pulls the CUDA build, with about 2.4 GB of `nvidia-*` libraries on top of PyTorch itself.
+Without an NVIDIA GPU, install the CPU build first:
 
 ```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu128
+pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Skip this step to run on CPU. Then install the scanner:
+Then install the scanner:
 
 ```bash
 pip install git+https://github.com/martijnvanderkamp/laya-pii-scanner.git
 ```
+
+For `--fast` only, skip PyTorch and Laya altogether:
+
+```bash
+pip install --no-deps git+https://github.com/martijnvanderkamp/laya-pii-scanner.git
+```
+
+If pip may only reach an internal mirror, such as Nexus or Artifactory, the PyTorch index
+(`https://download.pytorch.org/whl/cpu` or `/cu128`) has to be proxied there too.
 
 To install a fixed release instead of the latest code, add the version tag, or install the
 wheel from the [releases page](https://github.com/martijnvanderkamp/laya-pii-scanner/releases):
@@ -200,6 +224,24 @@ The patterns match like this:
 
 Exit codes: 0 when nothing reaches the `--fail-on` level, 1 when something does, and 2 for
 a usage error.
+
+**Where the output goes.** `laya-pii` prints its report to the terminal and writes nothing
+to disk. The scanned files are only read. A progress line goes to stderr, so it stays out of
+a saved report. To keep a report, redirect it:
+
+```bash
+laya-pii path/to/repo > report.txt
+```
+
+For other tools, save it as JSON:
+
+```bash
+laya-pii path/to/repo --json > report.json
+```
+
+**A saved report contains the personal data it found**, such as the IBAN and the names
+themselves. Treat it like the data it lists: store it outside the scanned repository and
+never commit it.
 
 **In CI.** The `--fast` mode needs no model, so a pipeline can install the scanner without
 its dependencies and fail the build on personal data:
