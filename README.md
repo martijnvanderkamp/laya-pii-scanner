@@ -67,6 +67,13 @@ Skip this step to run on CPU. Then install the scanner:
 pip install git+https://github.com/martijnvanderkamp/laya-pii-scanner.git
 ```
 
+To install a fixed release instead of the latest code, add the version tag, or install the
+wheel from the [releases page](https://github.com/martijnvanderkamp/laya-pii-scanner/releases):
+
+```bash
+pip install git+https://github.com/martijnvanderkamp/laya-pii-scanner.git@v0.1.0
+```
+
 The first run downloads Laya's English and multilingual checkpoints (about 1.5 GB) from
 Hugging Face into your local cache. After that, add `--offline` to run without a network.
 
