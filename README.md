@@ -221,13 +221,29 @@ The patterns match like this:
 | `--exclude PATTERN` | Skip matching paths. Repeatable. |
 | `--max-size KB` | Skip larger files. Default 1000. |
 | `--show-skipped` | List every skipped path and why. |
+| `--quiet` | No progress line and no loading messages on stderr. |
 
 Exit codes: 0 when nothing reaches the `--fail-on` level, 1 when something does, and 2 for
 a usage error.
 
+**Following a long scan.** The header appears as soon as the files are listed. Each file
+with findings is printed the moment it has been scanned, so results appear while the scan
+continues. A progress line at the bottom shows:
+
+```text
+[123/365 files · 41% · 3:05 · about 4:20 left · 17 with findings] · docs/intake-notes.md
+```
+
+- The percentage counts bytes, not files, because large files take longer.
+- In a terminal the line updates in place. Elsewhere, such as a CI log or `2> progress.log`,
+  a plain line is written at every 10% and at least once a minute.
+- Loading the model and listing the files are announced too.
+- Progress and these messages go to stderr, so they never end up in a saved report.
+  `--quiet` turns them off.
+
 **Where the output goes.** `laya-pii` prints its report to the terminal and writes nothing
-to disk. The scanned files are only read. A progress line goes to stderr, so it stays out of
-a saved report. To keep a report, redirect it:
+to disk. The scanned files are only read. To keep a report, redirect it; you still see the
+progress in your terminal:
 
 ```bash
 laya-pii path/to/repo > report.txt

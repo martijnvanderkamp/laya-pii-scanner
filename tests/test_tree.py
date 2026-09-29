@@ -170,3 +170,40 @@ def test_cli_threshold_override(project):
     assert run_cli(project, "--threshold", "name=0.95").returncode == 1
     bad = run_cli(project, "--threshold", "nonsense=1")
     assert bad.returncode == 2 and "--threshold" in bad.stderr
+
+
+def test_scan_tree_reports_progress_and_streams_files(project):
+    events = []
+    rep = scan_tree(PIIScanner(router=FakeRouter()), project,
+                    progress=lambda st: events.append(("progress", st.files_done, st.bytes_done, st.current)),
+                    on_start=lambda found, total: events.append(("start", len(found.files), total)),
+                    on_file=lambda r: events.append(("file", r.path)))
+    assert events[0][0] == "start" and events[0][1] == 3
+    total = events[0][2]
+    assert [e[1] for e in events if e[0] == "file"] == sorted(f.path for f in rep.files)
+    last = events[-1]
+    assert last == ("progress", 3, total, "")  # final call: everything done
+    done = [e[1] for e in events if e[0] == "progress"]
+    assert done == sorted(done)
+
+
+def test_cli_progress_goes_to_stderr_and_quiet_silences_it(project):
+    out = run_cli(project)
+    assert "files ·" in out.stderr and "done" in out.stderr      # plain lines outside a terminal
+    assert "files ·" not in out.stdout                            # the report stays clean
+    assert "src/app.py" in out.stdout and "files in" in out.stdout
+    quiet = run_cli(project, "--quiet")
+    assert quiet.stderr == "" and "src/app.py" in quiet.stdout
+
+
+def test_live_progress_line_redraws_in_place(capsys):
+    from laya_pii_scanner.cli import ProgressLine
+    from laya_pii_scanner.tree import Progress
+    line = ProgressLine(enabled=True)
+    line.live = True                                   # as in a terminal
+    st = Progress(files_total=4, bytes_total=400, files_done=1, bytes_done=100, current="src/app.py")
+    line(st)
+    line.clear()
+    err = capsys.readouterr().err
+    assert err.startswith("\r\x1b[K") and "[1/4 files · 25%" in err and "src/app.py" in err
+    assert err.endswith("\r\x1b[K")                    # cleared before the report continues

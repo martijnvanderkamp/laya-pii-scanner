@@ -21,6 +21,10 @@
 - **`--threshold NAME=VALUE`** to override any threshold from the command line, for example `name=0.9`.
 - **`--fast` rules-only mode.** It needs no model, GPU or PyTorch, but finds only formats, checksums and cued names.
 - **`--json` for folders**, with the file, line and column of every finding.
+- **Progress while scanning a folder.** Results for each file appear as soon as it is scanned.
+  - A progress line on stderr shows files, percentage (by bytes), elapsed time, estimated time left and the number of files with findings. It updates in place in a terminal, and is written as a plain line at every 10% in CI logs.
+  - Loading the model and listing the files are announced.
+  - `--quiet` turns all of this off.
 - **Folder reports show confirmed findings by default**, with a count of review items per file. `--show-review` lists the review items too; `--json` always includes them.
 - **Python API:** `scan_tree`, `scan_file` and `discover`.
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from dataclasses import asdict
@@ -28,7 +29,8 @@ from typing import Dict, List
 from . import __version__
 from .files import DEFAULT_MAX_BYTES, read_text, view_for
 from .scanner import CATEGORIES, THRESHOLDS, ChunkResult, PIIScanner, redact
-from .tree import FAIL_LEVELS, TreeReport, scan_tree
+from .files import Discovery
+from .tree import FAIL_LEVELS, FileReport, Progress, TreeReport, scan_tree
 
 _COLOUR = sys.stdout.isatty() and "NO_COLOR" not in os.environ
 BOLD, DIM, RESET = ("\033[1m", "\033[2m", "\033[0m") if _COLOUR else ("", "", "")
@@ -77,40 +79,104 @@ def to_json(text: str, chunks: List[ChunkResult]) -> dict:
 # ---------------------------------------------------------------- folders and repositories
 
 
-def tree_report(rep: TreeReport, show_skipped: bool, show_review: bool) -> None:
-    kind = {"git": "git repository, tracked files", "folder": "folder", "file": "file"}[rep.mode]
-    skipped = sum(rep.skipped.values())
-    reasons = ", ".join(f"{n} {r}" for r, n in sorted(rep.skipped.items(), key=lambda kv: -kv[1]))
-    print(f"\n{BOLD}{rep.root}{RESET} {DIM}· {kind} · {len(rep.files)} files scanned"
-          f"{f' · skipped {skipped}: {reasons}' if skipped else ''}{RESET}")
+def tree_header(found: Discovery, total_bytes: int, show_skipped: bool) -> None:
+    kind = {"git": "git repository, tracked files", "folder": "folder", "file": "file"}[found.mode]
+    skipped = sum(found.skipped.values())
+    reasons = ", ".join(f"{n} {r}" for r, n in sorted(found.skipped.items(), key=lambda kv: -kv[1]))
+    print(f"\n{BOLD}{found.root}{RESET} {DIM}· {kind} · {len(found.files)} files to scan "
+          f"({_size(total_bytes)}){f' · skipped {skipped}: {reasons}' if skipped else ''}{RESET}", flush=True)
     if show_skipped:
-        for rel, reason in rep.skipped_paths:
+        for rel, reason in found.skipped_paths:
             print(f"{DIM}   skipped  {rel}  ({reason}){RESET}")
-    for f in rep.files:
-        if not f.findings:
+
+
+def file_block(f: FileReport, show_review: bool) -> None:
+    if not f.findings:
+        return
+    print(f"\n{VERDICT_COLOUR.get(f.verdict, '')}{BOLD}{f.path}{RESET}  "
+          f"{VERDICT_COLOUR.get(f.verdict, '')}{VERDICT_LABEL[f.verdict]}{RESET}")
+    for x in f.findings:
+        if not (x.confirmed or show_review):
             continue
-        print(f"\n{VERDICT_COLOUR.get(f.verdict, '')}{BOLD}{f.path}{RESET}  "
-              f"{VERDICT_COLOUR.get(f.verdict, '')}{VERDICT_LABEL[f.verdict]}{RESET}")
-        for x in f.findings:
-            if not (x.confirmed or show_review):
-                continue
-            where = f"{x.line}:{x.column}" if x.column else f"{x.line}"
-            mark = "  " if x.confirmed else "? "
-            print(f"   {mark}{where:<9}{CATEGORIES[x.category][0]:<26}{x.text[:40]!r:<44}"
-                  f"{x.confidence:>5.2f}  {DIM}{x.source}{RESET}")
-        hidden = 0 if show_review else sum(not x.confirmed for x in f.findings)
-        if hidden:
-            print(f"{DIM}   + {hidden} below the threshold (--show-review lists them){RESET}")
+        where = f"{x.line}:{x.column}" if x.column else f"{x.line}"
+        mark = "  " if x.confirmed else "? "
+        print(f"   {mark}{where:<9}{CATEGORIES[x.category][0]:<26}{x.text[:40]!r:<44}"
+              f"{x.confidence:>5.2f}  {DIM}{x.source}{RESET}")
+    hidden = 0 if show_review else sum(not x.confirmed for x in f.findings)
+    if hidden:
+        print(f"{DIM}   + {hidden} below the threshold (--show-review lists them){RESET}")
+    sys.stdout.flush()
+
+
+def tree_summary(rep: TreeReport) -> None:
     c = rep.counts()
-    print(f"\n{BOLD}{len(rep.files)} files in {rep.seconds:.1f} s:{RESET} "
+    unreadable = rep.skipped.get("not UTF-8 text", 0)
+    print(f"\n{BOLD}{len(rep.files)} files in {_duration(rep.seconds)}:{RESET} "
           f"{c['special']} special category data · {c['personal']} personal data · "
-          f"{c['review']} review · {c['clean']} clean")
+          f"{c['review']} review · {c['clean']} clean"
+          f"{f' · {unreadable} not UTF-8, skipped' if unreadable else ''}")
 
 
-def progress(i: int, n: int, rel: str) -> None:
-    line = f"[{i + 1}/{n}] {rel}"
-    sys.stderr.write("\r" + line[:100].ljust(100))
-    sys.stderr.flush()
+def _size(n: float) -> str:
+    for unit in ("B", "KB", "MB"):
+        if n < 1000:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1000
+    return f"{n:.1f} GB"
+
+
+def _duration(seconds: float) -> str:
+    if seconds < 10:
+        return f"{seconds:.1f} s"
+    m, s = divmod(int(round(seconds)), 60)
+    h, m = divmod(m, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m}:{s:02d}"
+
+
+class ProgressLine:
+    """Shows scan progress on stderr, out of the way of the report on stdout.
+
+    In a terminal one line is redrawn in place; elsewhere (CI logs, `2> log.txt`) a plain line
+    is written at every 10% and at least once a minute.
+    """
+
+    def __init__(self, enabled: bool):
+        self.enabled = enabled
+        self.live = enabled and sys.stderr.isatty()
+        self.shown = False
+        self.last_step = -1
+        self.last_time = 0.0
+
+    @staticmethod
+    def text(st: Progress) -> str:
+        left = st.remaining
+        eta = f" · about {_duration(left)} left" if left is not None and st.current else ""
+        where = f" · {st.current}" if st.current else " · done"
+        return (f"[{st.files_done}/{st.files_total} files · {st.fraction:.0%} · {_duration(st.elapsed)}"
+                f"{eta} · {st.files_with_findings} with findings]{where}")
+
+    def __call__(self, st: Progress) -> None:
+        if not self.enabled:
+            return
+        line = self.text(st)
+        if self.live:
+            width = max(20, shutil.get_terminal_size((100, 20)).columns - 1)
+            sys.stderr.write("\r\033[K" + DIM + line[:width] + RESET)
+            sys.stderr.flush()
+            self.shown = True
+            return
+        step, now = int(st.fraction * 10), time.perf_counter()
+        if step > self.last_step or now - self.last_time >= 60 or not st.current:
+            self.last_step, self.last_time = step, now
+            sys.stderr.write(line + "\n")
+            sys.stderr.flush()
+
+    def clear(self) -> None:
+        """Remove the live line before other output is printed below it."""
+        if self.live and self.shown:
+            sys.stderr.write("\r\033[K")
+            sys.stderr.flush()
+            self.shown = False
 
 
 # ---------------------------------------------------------------- main
@@ -141,6 +207,7 @@ def main() -> None:
     g.add_argument("--max-size", type=int, default=DEFAULT_MAX_BYTES // 1000, metavar="KB",
                    help=f"skip files larger than this (default: {DEFAULT_MAX_BYTES // 1000} KB)")
     g.add_argument("--show-skipped", action="store_true", help="list every skipped file and why")
+    p.add_argument("--quiet", action="store_true", help="no progress or loading messages on stderr")
     g.add_argument("--show-review", action="store_true",
                    help="also list findings below the threshold (always included in --json)")
     p.add_argument("--version", action="version", version=f"laya-pii {__version__}")
@@ -165,13 +232,17 @@ def main() -> None:
     os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
     if os.name == "nt":
         os.system("")  # enables ANSI colours in older Windows consoles
-    for stream in (sys.stdout, sys.stdin):
+    for stream in (sys.stdout, sys.stderr, sys.stdin):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
 
-    if not args.json and not args.fast:
-        print(f"{DIM}Loading Laya…{RESET}", flush=True, file=sys.stderr)
+    chatty = not args.fast and not args.quiet
+    if chatty:
+        print(f"{DIM}Loading Laya… (the first run downloads about 1.5 GB){RESET}", flush=True, file=sys.stderr)
+    loading = time.perf_counter()
     scanner = PIIScanner(device=args.device, rules_only=args.fast)
+    if chatty:
+        print(f"{DIM}Laya loaded in {time.perf_counter() - loading:.1f} s{RESET}", flush=True, file=sys.stderr)
     fail = FAIL_LEVELS[args.fail_on]
 
     def run_text(text: str) -> bool:
@@ -194,16 +265,27 @@ def main() -> None:
         # or visible text only
 
     if targets:  # folders, repositories or several files
-        show_progress = sys.stderr.isatty() and not args.json
+        line = ProgressLine(enabled=not args.quiet)
         reports = []
+
+        def on_start(found: Discovery, total: int) -> None:
+            if not args.json:
+                tree_header(found, total, args.show_skipped)
+
+        def on_file(rep: FileReport) -> None:
+            if not args.json and rep.findings:
+                line.clear()
+                file_block(rep, args.show_review)
+
         for t in targets:
+            if not args.quiet and t.is_dir():
+                print(f"{DIM}Listing files in {t.resolve()}…{RESET}", flush=True, file=sys.stderr)
             rep = scan_tree(scanner, t, args.include_untracked, args.exclude, args.max_size * 1000,
-                            progress if show_progress else None)
-            if show_progress:
-                sys.stderr.write("\r" + " " * 100 + "\r")
+                            progress=line, on_start=on_start, on_file=on_file)
+            line.clear()
             reports.append(rep)
             if not args.json:
-                tree_report(rep, args.show_skipped, args.show_review)
+                tree_summary(rep)
         if args.json:
             out = [r.to_dict() for r in reports]
             print(json.dumps(out[0] if len(out) == 1 else out, ensure_ascii=False, indent=1))

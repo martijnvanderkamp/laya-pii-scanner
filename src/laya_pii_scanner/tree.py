@@ -84,24 +84,74 @@ def scan_file(scanner: PIIScanner, path: Path, rel: str) -> Optional[FileReport]
 
 def scan_tree(scanner: PIIScanner, target: Path, include_untracked: bool = False,
               excludes: Iterable[str] = (), max_bytes: int = DEFAULT_MAX_BYTES,
-              progress: Optional[Callable[[int, int, str], None]] = None) -> TreeReport:
-    """Scan a file, folder or git repository. See `files.discover` for what is skipped."""
+              progress: Optional[Callable[["Progress"], None]] = None,
+              on_start: Optional[Callable[[Discovery, int], None]] = None,
+              on_file: Optional[Callable[[FileReport], None]] = None) -> TreeReport:
+    """Scan a file, folder or git repository. See `files.discover` for what is skipped.
+
+    on_start(discovery, total_bytes) runs once the files are listed, before any is scanned;
+    progress(state) runs before each file and once at the end; on_file(report) runs after each
+    scanned file, so a caller can show results while the scan continues.
+    """
     start = time.perf_counter()
     target = target.resolve()
     if target.is_file():
         found = Discovery(target.parent, "file", [target])
     else:
         found = discover(target, include_untracked, excludes, max_bytes)
+    sizes = [p.stat().st_size for p in found.files]
+    state = Progress(files_total=len(found.files), bytes_total=sum(sizes))
+    if on_start:
+        on_start(found, state.bytes_total)
     reports: List[FileReport] = []
-    for i, path in enumerate(found.files):
-        rel = path.relative_to(found.root).as_posix()
+    for path, size in zip(found.files, sizes):
+        state.current = path.relative_to(found.root).as_posix()
         if progress:
-            progress(i, len(found.files), rel)
-        report = scan_file(scanner, path, rel)
+            progress(state)
+        report = scan_file(scanner, path, state.current)
+        state.files_done += 1
+        state.bytes_done += size
         if report is None:
             found.skipped["not UTF-8 text"] += 1
-            found.skipped_paths.append((rel, "not UTF-8 text"))
-        else:
-            reports.append(report)
+            found.skipped_paths.append((state.current, "not UTF-8 text"))
+            continue
+        reports.append(report)
+        if report.findings and report.verdict != "clean":
+            state.files_with_findings += 1
+        if on_file:
+            on_file(report)
+    state.current = ""
+    if progress:
+        progress(state)
     return TreeReport(str(found.root), found.mode, reports, dict(found.skipped),
                       [list(p) for p in found.skipped_paths], time.perf_counter() - start)
+
+
+@dataclass
+class Progress:
+    """Where a running scan is. Byte counts drive the percentage, since file sizes vary widely."""
+    files_total: int
+    bytes_total: int
+    files_done: int = 0
+    bytes_done: int = 0
+    files_with_findings: int = 0
+    current: str = ""
+    started: float = field(default_factory=time.perf_counter)
+
+    @property
+    def fraction(self) -> float:
+        if self.bytes_total:
+            return self.bytes_done / self.bytes_total
+        return self.files_done / self.files_total if self.files_total else 1.0
+
+    @property
+    def elapsed(self) -> float:
+        return time.perf_counter() - self.started
+
+    @property
+    def remaining(self) -> Optional[float]:
+        """Estimated seconds left, once there is enough to go on."""
+        f = self.fraction
+        if f < 0.02 or self.elapsed < 3:
+            return None
+        return self.elapsed * (1 - f) / f
